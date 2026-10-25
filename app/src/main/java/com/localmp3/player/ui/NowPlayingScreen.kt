@@ -7,7 +7,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,7 +33,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistPlay
@@ -40,6 +44,8 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -96,10 +102,12 @@ fun NowPlayingScreen(
     onOpenLibrary: () -> Unit,
     onEnsureQueue: () -> Unit,
     onQueueSongClick: (Song) -> Unit,
+    onDeleteSongFile: (Song) -> Unit,
 ) {
     var scrubbing by remember { mutableStateOf(false) }
     var scrubValue by remember { mutableFloatStateOf(0f) }
     var showQueue by remember { mutableStateOf(false) }
+    var songPendingDelete by remember { mutableStateOf<Song?>(null) }
     val duration = durationMs.coerceAtLeast(0L)
     val sliderValue = if (scrubbing) {
         scrubValue
@@ -374,17 +382,31 @@ fun NowPlayingScreen(
                     onQueueSongClick(it)
                     showQueue = false
                 },
+                onRequestDelete = { songPendingDelete = it },
             )
         }
     }
+
+    songPendingDelete?.let { pending ->
+        DeleteFileConfirmDialog(
+            songTitle = pending.title,
+            onDismiss = { songPendingDelete = null },
+            onConfirm = {
+                songPendingDelete = null
+                onDeleteSongFile(pending)
+            },
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun QueueSheetContent(
     title: String,
     songs: List<Song>,
     currentSongId: Long?,
     onSongClick: (Song) -> Unit,
+    onRequestDelete: (Song) -> Unit,
 ) {
     val listState = rememberLazyListState()
     val currentIndex = remember(songs, currentSongId) {
@@ -441,6 +463,7 @@ private fun QueueSheetContent(
                     .weight(1f, fill = true),
             ) {
                 itemsIndexed(songs, key = { _, s -> s.id }) { index, item ->
+                    var menuOpen by remember(item.id) { mutableStateOf(false) }
                     val selected = item.id == currentSongId
                     val background by animateColorAsState(
                         targetValue = if (selected) JadeSoft else MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
@@ -451,7 +474,10 @@ private fun QueueSheetContent(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .background(background)
-                            .clickable { onSongClick(item) }
+                            .combinedClickable(
+                                onClick = { onSongClick(item) },
+                                onLongClick = { menuOpen = true },
+                            )
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -488,6 +514,34 @@ private fun QueueSheetContent(
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        }
+                        Box {
+                            IconButton(onClick = { menuOpen = true }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MoreVert,
+                                    contentDescription = stringResource(R.string.song_actions),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = menuOpen,
+                                onDismissRequest = { menuOpen = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.delete_file)) },
+                                    onClick = {
+                                        menuOpen = false
+                                        onRequestDelete(item)
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = Icons.Rounded.DeleteOutline,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                        )
+                                    },
+                                )
+                            }
                         }
                     }
                 }

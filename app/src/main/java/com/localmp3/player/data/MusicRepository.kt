@@ -1,13 +1,25 @@
 package com.localmp3.player.data
 
+import android.app.RecoverableSecurityException
 import android.content.ContentUris
 import android.content.Context
+import android.content.IntentSender
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+
+sealed class DeleteSongResult {
+    data object Success : DeleteSongResult()
+    /** System UI must grant write/delete; [retryAfterGrant] means call [MusicRepository.deleteSong] again. */
+    data class NeedsUserConsent(
+        val intentSender: IntentSender,
+        val retryAfterGrant: Boolean,
+    ) : DeleteSongResult()
+    data class Failure(val message: String) : DeleteSongResult()
+}
 
 class MusicRepository(private val context: Context) {
 
@@ -109,6 +121,69 @@ class MusicRepository(private val context: Context) {
         }
 
         songs.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+    }
+
+    /**
+     * Permanently remove the audio from device storage via MediaStore.
+     * On Android 11+ this usually returns [DeleteSongResult.NeedsUserConsent] with a system dialog.
+     */
+    suspend fun deleteSong(song: Song): DeleteSongResult = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        val uri = song.contentUri
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return@withContext runCatching {
+                val request = MediaStore.createDeleteRequest(resolver, listOf(uri))
+                DeleteSongResult.NeedsUserConsent(
+                    intentSender = request.intentSender,
+                    retryAfterGrant = false,
+                )
+            }.getOrElse { error ->
+                DeleteSongResult.Failure(error.message ?: "无法创建删除请求")
+            }
+        }
+
+        try {
+            val rows = resolver.delete(uri, null, null)
+            if (rows > 0) {
+                return@withContext DeleteSongResult.Success
+            }
+            // Pre-Q fallback: delete file then MediaStore row if still present.
+            @Suppress("DEPRECATION")
+            val dataPath = resolver.query(
+                uri,
+                arrayOf(MediaStore.Audio.Media.DATA),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val col = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                    if (col >= 0) cursor.getString(col) else null
+                } else {
+                    null
+                }
+            }
+            if (!dataPath.isNullOrBlank()) {
+                val file = File(dataPath)
+                if (file.exists() && file.delete()) {
+                    resolver.delete(uri, null, null)
+                    return@withContext DeleteSongResult.Success
+                }
+            }
+            DeleteSongResult.Failure("删除失败：文件可能不存在或无写入权限")
+        } catch (e: SecurityException) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && e is RecoverableSecurityException) {
+                DeleteSongResult.NeedsUserConsent(
+                    intentSender = e.userAction.actionIntent.intentSender,
+                    retryAfterGrant = true,
+                )
+            } else {
+                DeleteSongResult.Failure(e.message ?: "没有删除权限")
+            }
+        } catch (e: Exception) {
+            DeleteSongResult.Failure(e.message ?: "删除失败")
+        }
     }
 
     companion object {

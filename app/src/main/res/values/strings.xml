@@ -56,4 +56,12 @@
     <string name="empty_playlist_songs">歌单里还没有歌曲</string>
     <string name="select_songs_title">选择歌曲</string>
     <string name="selected_count">已选 %1$d 首</string>
+    <string name="delete_file">删除文件</string>
+    <string name="delete_file_title">删除本地文件？</string>
+    <string name="delete_file_body">将从设备中永久删除「%1$s」对应的音频文件，无法仅从本应用列表移除。此操作不可恢复。</string>
+    <string name="delete_file_confirm">删除</string>
+    <string name="delete_file_success">已删除文件</string>
+    <string name="delete_file_cancelled">已取消删除</string>
+    <string name="delete_file_failed">删除失败，请重试</string>
+    <string name="song_actions">更多操作</string>
 </resources>

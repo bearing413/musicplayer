@@ -7,7 +7,9 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,12 +37,15 @@ import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.GraphicEq
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RemoveCircleOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -94,6 +99,7 @@ fun SongListScreen(
     onDeletePlaylist: (String) -> Unit,
     onSetPlaylistSongs: (String, List<Long>) -> Unit,
     onRemoveSongFromPlaylist: (String, Long) -> Unit,
+    onDeleteSongFile: (Song) -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
 ) {
@@ -102,6 +108,7 @@ fun SongListScreen(
     var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var addingToPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
+    var songPendingDelete by remember { mutableStateOf<Song?>(null) }
 
     val folders = remember(songs) { songs.groupByFolder() }
     val selectedFolder = remember(folders, selectedFolderPath) {
@@ -203,6 +210,7 @@ fun SongListScreen(
                             songs = songs,
                             currentSongId = currentSongId,
                             onSongClick = onSongClick,
+                            onRequestDelete = { songPendingDelete = it },
                         )
 
                         LibraryPane.FolderList -> FolderList(
@@ -216,6 +224,7 @@ fun SongListScreen(
                                 songs = folderSongs,
                                 currentSongId = currentSongId,
                                 onSongClick = onSongClick,
+                                onRequestDelete = { songPendingDelete = it },
                             )
                         }
 
@@ -240,6 +249,7 @@ fun SongListScreen(
                                 onRemove = { songId ->
                                     if (key != null) onRemoveSongFromPlaylist(key, songId)
                                 },
+                                onRequestDelete = { songPendingDelete = it },
                                 onAddSongs = { if (key != null) addingToPlaylistId = key },
                             )
                         }
@@ -274,6 +284,42 @@ fun SongListScreen(
             },
         )
     }
+
+    songPendingDelete?.let { song ->
+        DeleteFileConfirmDialog(
+            songTitle = song.title,
+            onDismiss = { songPendingDelete = null },
+            onConfirm = {
+                songPendingDelete = null
+                onDeleteSongFile(song)
+            },
+        )
+    }
+}
+
+@Composable
+fun DeleteFileConfirmDialog(
+    songTitle: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.delete_file_title)) },
+        text = {
+            Text(stringResource(R.string.delete_file_body, songTitle))
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.delete_file_confirm), color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
 }
 
 @Composable
@@ -457,6 +503,7 @@ private fun SongList(
     songs: List<Song>,
     currentSongId: Long?,
     onSongClick: (Song) -> Unit,
+    onRequestDelete: (Song) -> Unit,
 ) {
     LazyColumn(
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -469,6 +516,7 @@ private fun SongList(
                 song = song,
                 selected = song.id == currentSongId,
                 onClick = { onSongClick(song) },
+                onRequestDelete = { onRequestDelete(song) },
             )
         }
     }
@@ -644,6 +692,7 @@ private fun PlaylistDetail(
     currentSongId: Long?,
     onSongClick: (Song) -> Unit,
     onRemove: (Long) -> Unit,
+    onRequestDelete: (Song) -> Unit,
     onAddSongs: () -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
@@ -688,6 +737,7 @@ private fun PlaylistDetail(
                                 song = song,
                                 selected = song.id == currentSongId,
                                 onClick = { onSongClick(song) },
+                                onRequestDelete = { onRequestDelete(song) },
                             )
                         }
                         IconButton(onClick = { onRemove(song.id) }) {
@@ -813,13 +863,16 @@ private fun CreatePlaylistDialog(
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SongRow(
     index: Int,
     song: Song,
     selected: Boolean,
     onClick: () -> Unit,
+    onRequestDelete: () -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     val background by animateColorAsState(
         targetValue = if (selected) JadeSoft else MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
         label = "rowBg",
@@ -830,7 +883,10 @@ private fun SongRow(
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(background)
-            .clickable(onClick = onClick)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { menuOpen = true },
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -856,7 +912,7 @@ private fun SongRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Spacer(modifier = Modifier.size(8.dp))
+        Spacer(modifier = Modifier.size(4.dp))
         Column(horizontalAlignment = Alignment.End) {
             if (selected) {
                 Icon(
@@ -877,6 +933,34 @@ private fun SongRow(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(
+                    imageVector = Icons.Rounded.MoreVert,
+                    contentDescription = stringResource(R.string.song_actions),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            DropdownMenu(
+                expanded = menuOpen,
+                onDismissRequest = { menuOpen = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.delete_file)) },
+                    onClick = {
+                        menuOpen = false
+                        onRequestDelete()
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.DeleteOutline,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    },
+                )
+            }
         }
     }
 }

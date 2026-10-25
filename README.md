@@ -4,6 +4,13 @@
 
 启动器与界面显示名：**卿音**。应用包名保持 `com.localmp3.player`（未改 `applicationId`）。
 
+## 克隆
+
+```bash
+git clone https://github.com/bearing413/musicplayer.git
+cd musicplayer
+```
+
 ## 功能（v1）
 
 - 扫描本机音频（MP3 / FLAC / M4A / WAV 等）；曲名显示为**文件名（去扩展名）**，不用 ID3/MediaStore 标题
@@ -13,6 +20,7 @@
 - 正在播放页可查看并跳转当前播放列表
 - 用户自建歌单（本地持久化）：新建 / 添加 / 移除 / 删除
 - 退出后续播：记住当前播放列表与进度，下次打开停在正在播放（暂停待点）
+- 列表中可删除本地音频文件（需系统确认）
 - 播放 / 暂停 / 上一首 / 下一首 / 拖动进度
 - 后台播放与媒体通知控制（Media3 Session）
 - 封面大图（有专辑图时）

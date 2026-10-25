@@ -3,8 +3,10 @@ package com.localmp3.player.ui
 import android.app.Application
 import android.content.ComponentName
 import android.content.Context
+import android.content.IntentSender
 import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,6 +18,8 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import com.localmp3.player.LocalMp3Application
+import com.localmp3.player.R
+import com.localmp3.player.data.DeleteSongResult
 import com.localmp3.player.data.PlayMode
 import com.localmp3.player.data.PlaybackSession
 import com.localmp3.player.data.PlaybackSessionStore
@@ -25,8 +29,11 @@ import com.localmp3.player.data.next
 import com.localmp3.player.playback.PlaybackService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -35,6 +42,12 @@ import kotlinx.coroutines.launch
 enum class Screen { NowPlaying, Library }
 
 enum class PermissionStatus { Unknown, Granted, Denied, PermanentlyDenied }
+
+data class DeleteConsentRequest(
+    val intentSender: IntentSender,
+    val song: Song,
+    val retryAfterGrant: Boolean,
+)
 
 data class PlayerUiState(
     val permissionStatus: PermissionStatus = PermissionStatus.Unknown,
@@ -62,6 +75,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private val _uiState = MutableStateFlow(PlayerUiState(playlists = playlistStore.load()))
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
 
+    private val _deleteConsentRequests = MutableSharedFlow<DeleteConsentRequest>(extraBufferCapacity = 1)
+    val deleteConsentRequests: SharedFlow<DeleteConsentRequest> = _deleteConsentRequests.asSharedFlow()
+
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
     private var positionJob: Job? = null
@@ -74,6 +90,8 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private var didAttemptRestore: Boolean = false
     private var pendingRestorePositionMs: Long? = null
     private var pendingRestorePaused: Boolean = false
+    private var pendingDeleteSong: Song? = null
+    private var pendingDeleteRetry: Boolean = false
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -285,6 +303,145 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
         }
         rebuildShuffleOrder(queue.size)
         persistSession(sync = false)
+    }
+
+    /** Delete the local audio file (after UI confirmation). May emit [deleteConsentRequests]. */
+    fun deleteSongFile(song: Song) {
+        viewModelScope.launch {
+            when (val result = repository.deleteSong(song)) {
+                is DeleteSongResult.Success -> {
+                    onSongFileRemoved(song.id)
+                    toast(R.string.delete_file_success)
+                }
+                is DeleteSongResult.NeedsUserConsent -> {
+                    pendingDeleteSong = song
+                    pendingDeleteRetry = result.retryAfterGrant
+                    _deleteConsentRequests.emit(
+                        DeleteConsentRequest(
+                            intentSender = result.intentSender,
+                            song = song,
+                            retryAfterGrant = result.retryAfterGrant,
+                        ),
+                    )
+                }
+                is DeleteSongResult.Failure -> {
+                    toast(result.message)
+                }
+            }
+        }
+    }
+
+    fun onDeleteConsentResult(granted: Boolean) {
+        val song = pendingDeleteSong
+        val retry = pendingDeleteRetry
+        pendingDeleteSong = null
+        pendingDeleteRetry = false
+        if (song == null) return
+        if (!granted) {
+            toast(R.string.delete_file_cancelled)
+            return
+        }
+        viewModelScope.launch {
+            if (retry) {
+                when (val result = repository.deleteSong(song)) {
+                    is DeleteSongResult.Success -> {
+                        onSongFileRemoved(song.id)
+                        toast(R.string.delete_file_success)
+                    }
+                    is DeleteSongResult.NeedsUserConsent -> {
+                        toast(R.string.delete_file_failed)
+                    }
+                    is DeleteSongResult.Failure -> toast(result.message)
+                }
+            } else {
+                // createDeleteRequest already deleted on grant.
+                onSongFileRemoved(song.id)
+                toast(R.string.delete_file_success)
+            }
+        }
+    }
+
+    private fun onSongFileRemoved(songId: Long) {
+        // Strip from all user playlists.
+        playlistStore.load().forEach { playlist ->
+            if (songId in playlist.songIds) {
+                playlistStore.update(playlist.copy(songIds = playlist.songIds.filterNot { it == songId }))
+            }
+        }
+        refreshPlaylists()
+
+        val state = _uiState.value
+        val wasCurrent = state.currentSong?.id == songId
+        val newLibrary = state.songs.filterNot { it.id == songId }
+        val newQueue = state.playQueue.filterNot { it.id == songId }
+
+        _uiState.update {
+            it.copy(
+                songs = newLibrary,
+                playQueue = newQueue,
+                currentSong = if (wasCurrent) null else it.currentSong,
+            )
+        }
+
+        val player = controller
+        if (player != null && wasCurrent) {
+            if (newQueue.isEmpty()) {
+                player.stop()
+                player.clearMediaItems()
+                _uiState.update {
+                    it.copy(
+                        currentSong = null,
+                        isPlaying = false,
+                        positionMs = 0L,
+                        durationMs = 0L,
+                        playQueue = emptyList(),
+                    )
+                }
+                sessionStore.clear()
+            } else {
+                val nextIndex = state.playQueue.indexOfFirst { it.id == songId }
+                    .coerceAtLeast(0)
+                    .coerceAtMost(newQueue.lastIndex)
+                startQueue(
+                    queue = newQueue,
+                    index = nextIndex,
+                    title = state.queueTitle,
+                    playWhenReady = state.isPlaying,
+                    startPositionMs = 0L,
+                )
+            }
+        } else if (player != null && newQueue.isNotEmpty() && state.playQueue.any { it.id == songId }) {
+            val current = state.currentSong
+            val index = newQueue.indexOfFirst { it.id == current?.id }.takeIf { it >= 0 } ?: 0
+            val position = state.positionMs
+            applyQueueToPlayer(
+                player = player,
+                queue = newQueue,
+                index = index,
+                startPositionMs = position,
+                playWhenReady = state.isPlaying,
+                playMode = state.playMode,
+            )
+            persistSession(sync = false)
+        } else {
+            persistSession(sync = false)
+        }
+
+        // Soft-refresh MediaStore in case other metadata changed.
+        viewModelScope.launch {
+            runCatching { repository.loadSongs() }
+                .onSuccess { songs ->
+                    _uiState.update { it.copy(songs = songs) }
+                }
+        }
+    }
+
+    private fun toast(message: String) {
+        Toast.makeText(getApplication(), message, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun toast(resId: Int) {
+        Toast.makeText(getApplication(), resId, Toast.LENGTH_SHORT).show()
     }
 
     fun createPlaylist(name: String): UserPlaylist {

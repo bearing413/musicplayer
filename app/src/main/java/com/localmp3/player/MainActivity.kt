@@ -1,5 +1,6 @@
 package com.localmp3.player
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -8,8 +9,10 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.app.ActivityCompat
@@ -42,6 +45,12 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission(),
     ) { /* optional for media notification on API 33+ */ }
 
+    private val deleteConsentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        viewModel.onDeleteConsentResult(result.resultCode == Activity.RESULT_OK)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -64,6 +73,15 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             val state by viewModel.uiState.collectAsState()
+
+            LaunchedEffect(Unit) {
+                viewModel.deleteConsentRequests.collect { request ->
+                    deleteConsentLauncher.launch(
+                        IntentSenderRequest.Builder(request.intentSender).build(),
+                    )
+                }
+            }
+
             PlayerApp(
                 state = state,
                 onGrantPermission = {
@@ -93,6 +111,7 @@ class MainActivity : ComponentActivity() {
                 onDeletePlaylist = viewModel::deletePlaylist,
                 onSetPlaylistSongs = viewModel::setPlaylistSongs,
                 onRemoveSongFromPlaylist = viewModel::removeSongFromPlaylist,
+                onDeleteSongFile = viewModel::deleteSongFile,
                 onPlayPause = viewModel::togglePlayPause,
                 onPrevious = viewModel::skipPrevious,
                 onNext = viewModel::skipNext,

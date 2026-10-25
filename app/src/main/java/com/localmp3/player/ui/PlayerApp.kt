@@ -28,6 +28,7 @@ fun PlayerApp(
     onDeletePlaylist: (String) -> Unit,
     onSetPlaylistSongs: (String, List<Long>) -> Unit,
     onRemoveSongFromPlaylist: (String, Long) -> Unit,
+    onDeleteSongFile: (Song) -> Unit,
     onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
@@ -92,6 +93,7 @@ fun PlayerApp(
                                 onOpenLibrary = onOpenLibrary,
                                 onEnsureQueue = onEnsureQueue,
                                 onQueueSongClick = onQueueSongClick,
+                                onDeleteSongFile = onDeleteSongFile,
                             )
 
                             Screen.Library -> SongListScreen(
@@ -105,6 +107,7 @@ fun PlayerApp(
                                 onDeletePlaylist = onDeletePlaylist,
                                 onSetPlaylistSongs = onSetPlaylistSongs,
                                 onRemoveSongFromPlaylist = onRemoveSongFromPlaylist,
+                                onDeleteSongFile = onDeleteSongFile,
                                 onBack = onOpenNowPlaying,
                                 onRefresh = onRefreshLibrary,
                             )
